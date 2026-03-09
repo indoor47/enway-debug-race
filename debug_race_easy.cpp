@@ -1,15 +1,12 @@
-// DEBUG RACE -- Exercise 1: EASY
-// Bug difficulty: Medium-Easy
-// Domain: Autonomous vehicle waypoint follower
-//
-// INSTRUCTIONS:
-// This program simulates a simple waypoint follower for an autonomous sweeper.
-// It has 3 bugs. Find them -- manually or with AI.
-// The program should: follow waypoints in order, calculate distances correctly,
+// DEBUG RACE -- Round 1
+// Autonomous waypoint follower for a sweeper robot.
+// The program should follow waypoints in order, calculate distances correctly,
 // and report when the vehicle has completed its route.
 //
+// Something is wrong. Find the bugs.
+//
 // Compile: g++ -std=c++17 -o debug1 debug_race_easy.cpp -lm
-// Run: ./debug1
+// Run:     ./debug1
 
 #include <iostream>
 #include <vector>
@@ -34,9 +31,7 @@ struct Vehicle {
 double calculateDistance(const Waypoint& a, const Vehicle& v) {
     double dx = a.x - v.x;
     double dy = a.y - v.y;
-    // BUG 1: Using integer division instead of floating point
-    // sqrt of int division truncates intermediate results
-    return std::sqrt(dx * dx + dy + dy);  // BUG: should be dy * dy, not dy + dy
+    return std::sqrt(dx * dx + dy + dy);
 }
 
 void moveToward(Vehicle& vehicle, const Waypoint& target, double dt) {
@@ -73,10 +68,8 @@ void simulateRoute(Vehicle& vehicle, const std::vector<Waypoint>& route) {
     std::cout << "Starting route simulation...\n";
     std::cout << "Vehicle at (" << vehicle.x << ", " << vehicle.y << ")\n";
 
-    // BUG 2: Off-by-one -- should be < route.size(), but also current_waypoint
-    // starts at 0 and the loop condition uses <= which goes one past the end
     while (vehicle.current_waypoint <= route.size() && iteration < max_iterations) {
-        const Waypoint& target = route[vehicle.current_waypoint];  // Can access out of bounds!
+        const Waypoint& target = route[vehicle.current_waypoint];
 
         moveToward(vehicle, target, dt);
 
@@ -89,8 +82,6 @@ void simulateRoute(Vehicle& vehicle, const std::vector<Waypoint>& route) {
         iteration++;
     }
 
-    // BUG 3: Wrong comparison -- checks if we iterated too many times
-    // but doesn't check if we actually completed the route
     if (iteration >= max_iterations) {
         std::cout << "Route incomplete -- timed out after " << iteration << " steps\n";
     } else {
@@ -122,28 +113,3 @@ int main() {
 
     return 0;
 }
-
-// === ANSWER KEY (for facilitator) ===
-//
-// BUG 1 (Line ~35): Distance calculation is wrong
-//   `dy + dy` should be `dy * dy`
-//   This makes the distance formula incorrect: sqrt(dx^2 + 2*dy) instead of sqrt(dx^2 + dy^2)
-//   This causes incorrect movement vectors and weird diagonal paths
-//
-// BUG 2 (Line ~63): Off-by-one / out-of-bounds access
-//   `vehicle.current_waypoint <= route.size()` should be `<`
-//   When current_waypoint equals route.size(), accessing route[current_waypoint]
-//   is undefined behavior (reads past the vector). This is a classic C++ UB bug.
-//   AI tools should catch this easily.
-//
-// BUG 3 (Line ~63 + 73): The route "completes" via UB
-//   The while loop exits either by timeout or by accessing past the end.
-//   In the "success" case, it actually triggered UB first.
-//   The completion check should verify current_waypoint == route.size() explicitly.
-//
-// EXPECTED AI BEHAVIOR:
-//   - AI should catch BUG 1 (arithmetic error) easily
-//   - AI should catch BUG 2 (off-by-one) easily -- this is a classic
-//   - BUG 3 is more subtle -- it's a logic error in the control flow
-//   - Good AI tools might also note that calculateDistance() and hasReachedWaypoint()
-//     compute distance differently (one is broken, one isn't), which is a code smell

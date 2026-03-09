@@ -1,14 +1,11 @@
-// DEBUG RACE -- Exercise 2: MEDIUM
-// Bug difficulty: Medium
-// Domain: Sensor fusion -- combining LiDAR and odometry data
+// DEBUG RACE -- Round 2
+// Sensor fusion node combining LiDAR scan data with wheel odometry
+// to estimate vehicle position.
 //
-// INSTRUCTIONS:
-// This program simulates a simple sensor fusion node that combines
-// LiDAR scan data with wheel odometry to estimate vehicle position.
-// It has 4 bugs of varying subtlety. Find them.
+// Something is wrong. Find the bugs.
 //
 // Compile: g++ -std=c++17 -o debug2 debug_race_medium.cpp -lpthread
-// Run: ./debug2
+// Run:     ./debug2
 
 #include <iostream>
 #include <vector>
@@ -59,10 +56,8 @@ public:
         double cos_theta = std::cos(current_pose_.theta);
         double sin_theta = std::sin(current_pose_.theta);
 
-        // BUG 1: Rotation matrix is wrong -- the y-component uses wrong signs
-        // Correct rotation: x' = dx*cos - dy*sin, y' = dx*sin + dy*cos
         current_pose_.x += odom.dx * cos_theta + odom.dy * sin_theta;
-        current_pose_.y += odom.dx * sin_theta - odom.dy * cos_theta;  // BUG: should be + odom.dy * cos_theta
+        current_pose_.y += odom.dx * sin_theta - odom.dy * cos_theta;
         current_pose_.theta += odom.dtheta;
 
         // Normalize theta to [-pi, pi]
@@ -73,21 +68,18 @@ public:
     }
 
     // Process laser scan: filter invalid readings and compute mean range
-    // Used as a simple "am I close to something?" proximity check
     double processLaserScan(const LaserScan& scan) {
         std::vector<float> valid_ranges;
 
         for (size_t i = 0; i < scan.ranges.size(); ++i) {
             float r = scan.ranges[i];
-            // BUG 2: Range validation is inverted
-            // Should keep ranges BETWEEN min and max, but the logic is wrong
-            if (r > scan.range_min || r < scan.range_max) {  // BUG: should be && not ||
+            if (r > scan.range_min || r < scan.range_max) {
                 valid_ranges.push_back(r);
             }
         }
 
         if (valid_ranges.empty()) {
-            return -1.0;  // no valid readings
+            return -1.0;
         }
 
         // Compute mean of closest 10% of readings (proximity indicator)
@@ -115,11 +107,8 @@ public:
 
             float angle = scan.angle_min + i * angle_increment;
 
-            // Transform to world frame
-            // BUG 3: Using the scan angle directly without adding the robot's heading
-            // The local->world transform needs: world_angle = local_angle + robot_theta
-            double world_x = current_pose_.x + r * std::cos(angle);  // BUG: missing + current_pose_.theta
-            double world_y = current_pose_.y + r * std::sin(angle);  // BUG: missing + current_pose_.theta
+            double world_x = current_pose_.x + r * std::cos(angle);
+            double world_y = current_pose_.y + r * std::sin(angle);
 
             world_points.push_back({world_x, world_y, 0.0, scan.timestamp});
         }
@@ -138,8 +127,7 @@ public:
 private:
     Pose2D current_pose_;
     std::mutex pose_mutex_;
-    bool running_;  // BUG 4: not atomic -- reading from one thread while potentially
-                    // writing from another is a data race. Should be std::atomic<bool>
+    bool running_;
 };
 
 // --- Simulation ---
@@ -148,7 +136,7 @@ void simulateOdometry(SensorFusion& fusion) {
     double t = 0.0;
     double dt = 0.05;  // 20Hz odometry
 
-    while (fusion.isRunning()) {  // Reading `running_` without lock -- data race with stop()
+    while (fusion.isRunning()) {
         // Simulate driving in a circle
         OdometryMsg odom;
         odom.dx = 1.0 * dt;       // 1 m/s forward
@@ -166,17 +154,15 @@ void simulateOdometry(SensorFusion& fusion) {
 void simulateLidar(SensorFusion& fusion) {
     double t = 0.0;
 
-    while (fusion.isRunning()) {  // Same data race
+    while (fusion.isRunning()) {
         LaserScan scan;
-        // Simulate 360 readings
         scan.ranges.resize(360);
         for (int i = 0; i < 360; ++i) {
-            // Simulate a wall at ~5m in front, open sides
             double angle = -M_PI + i * (2.0 * M_PI / 360.0);
             if (std::abs(angle) < 0.3) {
-                scan.ranges[i] = 5.0f + 0.1f * (rand() % 10 - 5);  // wall with noise
+                scan.ranges[i] = 5.0f + 0.1f * (rand() % 10 - 5);
             } else {
-                scan.ranges[i] = 25.0f + 0.5f * (rand() % 10 - 5); // far away
+                scan.ranges[i] = 25.0f + 0.5f * (rand() % 10 - 5);
             }
         }
         scan.timestamp = t;
@@ -214,10 +200,6 @@ int main() {
     std::cout << "\nFinal pose: (" << final_pose.x << ", " << final_pose.y
               << ", theta=" << final_pose.theta << ")\n";
 
-    // With correct odometry at 1 m/s forward + 0.2 rad/s turn for 5 seconds:
-    // The vehicle should trace roughly a circle arc
-    // Total distance ~ 5m, total turn ~ 1 rad
-    // Expected rough position: x~4.2, y~2.3 (circular arc)
     double expected_x = 4.2;
     double expected_y = 2.3;
     double error = std::sqrt(std::pow(final_pose.x - expected_x, 2) +
@@ -230,42 +212,3 @@ int main() {
 
     return 0;
 }
-
-// === ANSWER KEY (for facilitator) ===
-//
-// BUG 1 (Line ~57): Rotation matrix sign error
-//   `current_pose_.y += odom.dx * sin_theta - odom.dy * cos_theta;`
-//   Should be: `current_pose_.y += odom.dx * sin_theta + odom.dy * cos_theta;`
-//   The rotation matrix for body->world is:
-//     [cos -sin] [dx]     [dx*cos - dy*sin]
-//     [sin  cos] [dy]  =  [dx*sin + dy*cos]
-//   The minus sign flips the lateral component, causing drift in the wrong direction.
-//   In this specific simulation dy=0, so this bug is HIDDEN during normal forward driving.
-//   It only manifests when there's lateral slip. Sneaky.
-//
-// BUG 2 (Line ~79): Logical operator error in range validation
-//   `if (r > scan.range_min || r < scan.range_max)` is always true for finite r
-//   Should be: `if (r > scan.range_min && r < scan.range_max)`
-//   This means ALL readings pass the filter, including NaN/inf/negative values.
-//   AI should catch this easily -- it's a classic boolean logic error.
-//
-// BUG 3 (Line ~101-102): Missing heading in local-to-world transform
-//   `double world_x = current_pose_.x + r * std::cos(angle);`
-//   Should be: `double world_x = current_pose_.x + r * std::cos(angle + current_pose_.theta);`
-//   Same for y. Without adding the robot's heading, the scan points are always
-//   projected as if the robot faces east, regardless of actual heading.
-//   AI tools are moderate at catching this -- it requires understanding coordinate frames.
-//
-// BUG 4 (Line ~113): Data race on `running_` bool
-//   `bool running_` is read by isRunning() from two threads without synchronization.
-//   Should be `std::atomic<bool> running_`.
-//   This is technically UB per the C++ standard. In practice it "works" on x86 due to
-//   strong memory ordering, but it's still wrong and can fail on ARM.
-//   Many AI tools catch this; it's a well-known pattern.
-//
-// EXPECTED AI BEHAVIOR:
-//   - BUG 2 (|| vs &&): AI catches this 90%+ of the time
-//   - BUG 4 (non-atomic bool): AI catches this 80%+ of the time
-//   - BUG 3 (missing heading): AI catches this ~60% of the time -- requires domain knowledge
-//   - BUG 1 (rotation matrix sign): AI catches this ~40% -- it's hidden because dy=0 in simulation
-//     and requires understanding the 2D rotation matrix convention
